@@ -1,136 +1,69 @@
-import subprocess
-import sys
-
-# Forzar la instalación automática si falta el módulo
-try:
-    import st_gsheets_connection
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "st-gsheets-connection"])
-    import st_gsheets_connection
-
-from st_gsheets_connection import GSheetsConnection
+import os
+import json
 import streamlit as st
 import pandas as pd
 from st_gsheets_connection import GSheetsConnection
 
-# 1. Configuración de página centrada
-st.set_page_config(
-    page_title="Control de Llamadas y Pagos - Marketplace",
-    page_icon="📋",
-    layout="centered"
-)
+# URL de tu hoja de Google Sheets
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1NbCJ0tNwbAKVkUBk-A1RaeL4kfVw-b_O2cDq92UDedk/edit"
 
-# Estilo CSS para ajustar márgenes y formato compacto
-st.markdown("""
-    <style>
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 650px;
-    }
-    div[data-testid="stVerticalBlock"] > div {
-        gap: 0.8rem;
-    }
-    </style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Control Marketplace", layout="wide")
 
-# 2. Conexión con Google Sheets
-try:
+# 1. Configuración de conexión leyendo de la Variable de Entorno de Render
+gcp_json_str = os.getenv("GCP_SERVICE_ACCOUNT")
+
+if gcp_json_str:
+    try:
+        creds_dict = json.loads(gcp_json_str)
+        conn = st.connection(
+            "gsheets",
+            type=GSheetsConnection,
+            service_account_info=creds_dict
+        )
+    except Exception as e:
+        st.error(f"Error al procesar la variable GCP_SERVICE_ACCOUNT: {e}")
+        st.stop()
+else:
+    # Si no encuentra la variable de entorno, intenta cargar por defecto
     conn = st.connection("gsheets", type=GSheetsConnection)
+
+st.title("📊 Control de Ventas / Marketplace")
+
+# 2. Leer los datos actuales de la hoja (ttl=0 para tiempo real sin caché)
+try:
+    df_actual = conn.read(spreadsheet=SPREADSHEET_URL, ttl=0)
+    st.subheader("Registros Actuales")
+    st.dataframe(df_actual, use_container_width=True)
 except Exception as e:
-    conn = None
+    st.error(f"Error al conectar con Google Sheets: {e}")
+    st.stop()
 
-st.title("Control de Llamadas y Pagos")
+# 3. Formulario para ingresar nuevos registros
+st.divider()
+st.subheader("➕ Agregar Nuevo Registro")
 
-# 3. Pestañas principales
-tab1, tab2 = st.tabs(["Registro y Cobros", "Reporte Mensual"])
-
-with tab1:
-    # --- SECCIÓN 1: Configuración y Tarifa ---
-    with st.container(border=True):
-        st.subheader("Configuración y Tarifa")
+with st.form("nuevo_registro_form"):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        producto = st.text_input("Producto / Ítem")
+    with col2:
+        monto = st.number_input("Monto / Precio ($)", min_value=0.0, step=0.5)
         
-        col_mes, col_semana = st.columns(2)
-        with col_mes:
-            mes = st.selectbox("Mes:", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=6)
-        with col_semana:
-            semana = st.selectbox("Semana:", ["Semana 1", "Semana 2", "Semana 3", "Semana 4"], index=3)
-        
-        precio_llamada = st.number_input("Precio/Llamada ($):", min_value=0.0, value=1.20, step=0.10, format="%.2f")
+    enviar = st.form_submit_button("💾 Guardar Registro", use_container_width=True)
 
-    # --- SECCIÓN 2: Registro Diario ---
-    with st.container(border=True):
-        st.subheader("Registro Diario")
-        
-        # Encabezados de la mini-tabla
-        h1, h2, h3 = st.columns([2, 3, 3])
-        h1.caption("**Día**")
-        h2.caption("**Mensajes**")
-        h3.caption("**Llamadas Válidas**")
-
-        dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        
-        total_mensajes = 0
-        total_llamadas = 0
-        registro_dias = {}
-
-        for dia in dias:
-            c_dia, c_msg, c_llm = st.columns([2, 3, 3])
-            c_dia.write(f"**{dia}:**")
-            
-            msg = c_msg.number_input(f"Msg_{dia}", min_value=0, value=0, label_visibility="collapsed")
-            llm = c_llm.number_input(f"Llm_{dia}", min_value=0, value=0, label_visibility="collapsed")
-            
-            registro_dias[dia] = {"mensajes": msg, "llamadas": llm}
-            total_mensajes += msg
-            total_llamadas += llm
-
-        st.markdown("---")
-        guardar = st.button("Guardar Datos de la Semana", use_container_width=True, type="primary")
-
-        # LÓGICA DE GUARDADO EN GOOGLE SHEETS
-        if guardar:
-            monto_semana = total_llamadas * precio_llamada
-            
-            nuevo_registro = pd.DataFrame([{
-                "Mes": mes,
-                "Semana": semana,
-                "Precio Llamada": precio_llamada,
-                "Total Mensajes": total_mensajes,
-                "Total Llamadas": total_llamadas,
-                "Monto Cobrar": monto_semana
-            }])
-            
-            if conn:
-                try:
-                    # Leer datos existentes para no sobreescribir
-                    existing_data = conn.read()
-                    updated_df = pd.concat([existing_data, nuevo_registro], ignore_index=True)
-                    conn.update(data=updated_df)
-                    st.success(f"¡Datos de {mes} ({semana}) guardados exitosamente en Google Sheets!")
-                except Exception as err:
-                    st.error(f"Error al conectar con Google Sheets: {err}")
-            else:
-                st.warning("No se ha detectado la configuración de credenciales de Google Sheets en Render.")
-
-    # --- SECCIÓN 3: Resumen de Cobro ---
-    with st.container(border=True):
-        st.subheader("Resumen de Cobro de la Semana")
-        
-        st.write(f"Total Mensajes ({semana}): **{total_mensajes}**")
-        st.write(f"Total Llamadas Válidas ({semana}): **{total_llamadas}**")
-        
-        monto_total = total_llamadas * precio_llamada
-        st.markdown(f"### **Monto a Cobrar esta Semana: ${monto_total:.2f}**")
-
-with tab2:
-    with st.container(border=True):
-        st.subheader("Reporte Mensual")
-        if conn:
-            try:
-                datos_hoja = conn.read()
-                st.dataframe(datos_hoja, use_container_width=True)
-            except Exception:
-                st.info("Sin registros cargados aún en Google Sheets.")
+    if enviar:
+        if not producto:
+            st.warning("Por favor, ingresa el nombre del producto.")
         else:
-            st.info("Configura las credenciales de Google Sheets para ver el historial.")
+            # Crear la nueva fila de datos
+            nuevo_dato = pd.DataFrame([{"Producto": producto, "Monto": monto}])
+            
+            # Combinar la lista existente con el nuevo dato
+            df_actualizado = pd.concat([df_actual, nuevo_dato], ignore_index=True)
+            
+            # Sobrescribir / Actualizar en Google Sheets
+            conn.update(spreadsheet=SPREADSHEET_URL, data=df_actualizado)
+            
+            st.success(f"¡'{producto}' guardado con éxito en Google Sheets!")
+            st.rerun()  # Recarga la app para reflejar el cambio de inmediato
