@@ -1,3 +1,14 @@
+import subprocess
+import sys
+
+# Forzar la instalación automática si falta el módulo
+try:
+    import st_gsheets_connection
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "st-gsheets-connection"])
+    import st_gsheets_connection
+
+from st_gsheets_connection import GSheetsConnection
 import streamlit as st
 import pandas as pd
 from st_gsheets_connection import GSheetsConnection
