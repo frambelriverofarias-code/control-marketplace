@@ -1,13 +1,15 @@
 import streamlit as st
+import pandas as pd
+from st_gsheets_connection import GSheetsConnection
 
-# 1. Configuración de página centrada y limpia
+# 1. Configuración de página centrada
 st.set_page_config(
     page_title="Control de Llamadas y Pagos - Marketplace",
     page_icon="📋",
     layout="centered"
 )
 
-# Estilo CSS opcional para ajustar márgenes y bordes compactos
+# Estilo CSS para ajustar márgenes y formato compacto
 st.markdown("""
     <style>
     .block-container {
@@ -21,9 +23,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# 2. Conexión con Google Sheets
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    conn = None
+
 st.title("Control de Llamadas y Pagos")
 
-# 2. Pestañas principales
+# 3. Pestañas principales
 tab1, tab2 = st.tabs(["Registro y Cobros", "Reporte Mensual"])
 
 with tab1:
@@ -51,39 +59,48 @@ with tab1:
 
         dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
         
-        # Diccionario o lista para capturar valores
-        datos_dias = {}
         total_mensajes = 0
         total_llamadas = 0
-
-        # Para simular los valores por defecto de tu imagen de referencia
-        valores_ejemplo = {
-            "Lunes": (63, 7),
-            "Martes": (0, 0),
-            "Miércoles": (0, 0),
-            "Jueves": (0, 0),
-            "Viernes": (0, 0),
-            "Sábado": (0, 0),
-            "Domingo": (0, 0)
-        }
+        registro_dias = {}
 
         for dia in dias:
             c_dia, c_msg, c_llm = st.columns([2, 3, 3])
             c_dia.write(f"**{dia}:**")
             
-            val_msg_def, val_llm_def = valores_ejemplo.get(dia, (0, 0))
+            msg = c_msg.number_input(f"Msg_{dia}", min_value=0, value=0, label_visibility="collapsed")
+            llm = c_llm.number_input(f"Llm_{dia}", min_value=0, value=0, label_visibility="collapsed")
             
-            msg = c_msg.number_input(f"Msg_{dia}", min_value=0, value=val_msg_def, label_visibility="collapsed")
-            llm = c_llm.number_input(f"Llm_{dia}", min_value=0, value=val_llm_def, label_visibility="collapsed")
-            
+            registro_dias[dia] = {"mensajes": msg, "llamadas": llm}
             total_mensajes += msg
             total_llamadas += llm
 
         st.markdown("---")
         guardar = st.button("Guardar Datos de la Semana", use_container_width=True, type="primary")
 
+        # LÓGICA DE GUARDADO EN GOOGLE SHEETS
         if guardar:
-            st.success(f"¡Datos guardados para {mes} - {semana}!")
+            monto_semana = total_llamadas * precio_llamada
+            
+            nuevo_registro = pd.DataFrame([{
+                "Mes": mes,
+                "Semana": semana,
+                "Precio Llamada": precio_llamada,
+                "Total Mensajes": total_mensajes,
+                "Total Llamadas": total_llamadas,
+                "Monto Cobrar": monto_semana
+            }])
+            
+            if conn:
+                try:
+                    # Leer datos existentes para no sobreescribir
+                    existing_data = conn.read()
+                    updated_df = pd.concat([existing_data, nuevo_registro], ignore_index=True)
+                    conn.update(data=updated_df)
+                    st.success(f"¡Datos de {mes} ({semana}) guardados exitosamente en Google Sheets!")
+                except Exception as err:
+                    st.error(f"Error al conectar con Google Sheets: {err}")
+            else:
+                st.warning("No se ha detectado la configuración de credenciales de Google Sheets en Render.")
 
     # --- SECCIÓN 3: Resumen de Cobro ---
     with st.container(border=True):
@@ -98,4 +115,11 @@ with tab1:
 with tab2:
     with st.container(border=True):
         st.subheader("Reporte Mensual")
-        st.info("Aquí podrás consultar el acumulado de cobros e historial por mes.")
+        if conn:
+            try:
+                datos_hoja = conn.read()
+                st.dataframe(datos_hoja, use_container_width=True)
+            except Exception:
+                st.info("Sin registros cargados aún en Google Sheets.")
+        else:
+            st.info("Configura las credenciales de Google Sheets para ver el historial.")
